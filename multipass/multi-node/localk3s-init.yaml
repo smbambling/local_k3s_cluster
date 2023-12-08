@@ -1,0 +1,44 @@
+---
+users:
+  - default
+  - name: ubuntu
+    gecos: Ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: users, admin
+    shell: /bin/bash
+    ssh_import_id: None
+    lock_passwd: true
+
+package_update: true
+package_upgrade: true
+
+ca_certs:
+  trusted:
+    - |
+
+packages:
+  - nfs-common
+  - open-iscsi
+
+write_files:
+  - path: /etc/rancher/k3s/registries.yaml
+    content: |
+  - path: /etc/sysctl.d/90-k3s.conf
+    content: |
+      net.ipv4.ip_forward=1
+      net.ipv4.conf.all.forwarding=1
+      net.ipv6.conf.all.forwarding=1
+  - path: /etc/environment
+    content: |
+      KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      CRI_CONFIG_FILE=/var/lib/rancher/k3s/agent/etc/crictl.yaml
+    append: true
+
+runcmd:
+  - sudo rm /lib/systemd/system/nfs-common.service
+  - sudo systemctl daemon-reload
+  - sudo sysctl --system
+  - sudo systemctl enable nfs-common
+  - sudo systemctl start nfs-common
+  - sudo systemctl enable iscsid
+  - sudo systemctl start iscsid

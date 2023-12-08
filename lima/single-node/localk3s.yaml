@@ -1,0 +1,125 @@
+# Deploy kubernetes via k3s (which installs a bundled containerd).
+# $ limactl start --name=localk3sserver1 --tty=false ./localk3s.yaml
+# $ limactl shell localk3sk3sserver1 sudo kubectl
+
+# This templete requires Lima v0.7.0 or later.
+
+networks:
+  # Interface "lima0": shared mode  (IP is assigned by macOS's bootpd)
+  - lima: shared
+    interface: "lima0"
+
+#caCerts:
+#  certs:
+#    - |
+#      -----BEGIN CERTIFICATE-----
+#      YourLocalCert If Needed
+#      -----END CERTIFICATE-----
+
+# force ARM systems to run a VM with a foreign architecture
+#arch: "x86_64"
+
+# enable fast mode 2
+# reference: https://github.com/lima-vm/lima/blob/master/docs/multi-arch.md#fast-mode-2
+vmType: "vz"
+rosetta:
+  # Enable Rosetta for Linux.
+  # Hint: try `softwareupdate --install-rosetta` if Lima gets stuck at `Installing rosetta...`
+  enabled: true
+  # Register rosetta to /proc/sys/fs/binfmt_misc
+  binfmt: true
+
+images:
+  # Try to use release-yyyyMMdd image if available. Note that release-yyyyMMdd will be removed after several months.
+  - location: "https://cloud-images.ubuntu.com/releases/22.04/release-20230729/ubuntu-22.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+    digest: "sha256:d5b419272e01cd69bfc15cbbbc5700d2196242478a54b9f19746da3a1269b7c8"
+  - location: "https://cloud-images.ubuntu.com/releases/22.04/release-20230729/ubuntu-22.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+    digest: "sha256:5ecab49ff44f8e44954752bc9ef4157584b7bdc9e24f06031e777f60860a9d17"
+  # Fallback to the latest release image.
+  # Hint: run `limactl prune` to invalidate the cache
+  - location: "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+
+# Mounts are disabled in this example, but can be enabled optionally.
+mounts: []
+
+# containerd is managed by k3s, not by Lima, so the values are set to false here.
+containerd:
+  system: false
+  user: false
+
+provision:
+- mode: system
+  script: |
+    #!/bin/sh
+
+    # Install dependencies for Longhorn
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    nfs-common open-iscsi
+
+    # Enable/Start iscsid and nfs-common
+    #
+    # nfs-common is masked see: https://blog.ruanbekker.com/blog/2017/12/09/unmask-a-masked-service-in-systemd/
+    rm /lib/systemd/system/nfs-common.service
+    systemctl daemon-reload
+    sudo sysctl --system
+    systemctl start nfs-common
+    systemctl enable nfs-common
+    systemctl start iscsid
+    systemctl enable iscsid
+
+    cat << EOF > /etc/sysctl.d/90-k3s.conf
+    net.ipv4.ip_forward=1
+    net.ipv4.conf.all.forwarding=1
+    net.ipv6.conf.all.forwarding=1
+    EOF
+
+    mkdir -p  /etc/rancher/k3s
+
+    MY_EXT_IP=$(ip -4 -o addr show lima0 | awk '{ print $4}' | awk -F/ '{print $1}')
+
+    cat << EOF > /etc/rancher/k3s/config.yaml
+    ---
+    write-kubeconfig-mode: "0644"
+    disable:
+      - traefik
+      - servicelb
+    # disable-network-policy: true
+    secrets-encryption: true
+    #system-default-registry: myLocalRegistry
+    kube-controller-manager-arg:
+      - "bind-address=0.0.0.0"
+    kube-proxy-arg:
+      - "metrics-bind-address=0.0.0.0"
+    kube-scheduler-arg:
+      - "bind-address=0.0.0.0"
+    node-ip: ${MY_EXT_IP}
+    tls-san:
+      - $(hostname | cut -d- -f2)
+      - $(hostname)
+    EOF
+
+    cat << EOF > /etc/rancher/k3s/registries.yaml
+    ---
+    EOF
+
+    # install K3s
+    curl -sfL https://get.k3s.io | sh -s server \
+    --node-external-ip="${MY_EXT_IP}" --flannel-external-ip --flannel-iface="lima0" --bind-address="${MY_EXT_IP}"
+
+probes:
+- script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    #if ! timeout 30s bash -c "until test -f /etc/rancher/k3s/k3s.yaml; do sleep 3; done"; then
+    if ! timeout 30s bash -c "until kubectl wait node $(hostname) --for condition=ready; do sleep 3; done"; then
+      echo >&2 "k3s is not running yet"
+      exit 1
+    fi
+    if ! timeout 30s bash -c "until test -f /etc/rancher/k3s/k3s.yaml; do sleep 3; done"; then
+      echo >&2 "k3s kubeconfig not generated yet"
+      exit 1
+    fi
