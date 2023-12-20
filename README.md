@@ -72,7 +72,7 @@ To create a local K3s single node (standalone) Kubernetes instance, execute the 
 >
 > * -c [ default = 1 ] : VM CPU Count
 > * -d [ default = 20 ] : VM Disk size in GiB
-> * -m [ default = 4 ] : VM Disk size in GiB
+> * -m [ default = 4 ] : VM RAM size in GiB
 > * -v [ default = v1.27.3+k3s1 ] : K3s install version
 
 #### Using Lima
